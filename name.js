@@ -13,12 +13,13 @@
 // See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 (function(){
 
+
     const CLIENTONLY = false;
     const ENTITY_CHECK_INTERVAL = 5000; // ms = 5 seconds
-    const STARTUP_DELAY = 2000; // ms = 2 second
+    const STARTUP_DELAY = 5000; // ms = 2 second
     const OLD_AGE = 3500; // we recreate the entity if older than this time in seconds
     const TTL = 2; // time to live in seconds if script is not running
-    const HEIGHT_ABOVE_HEAD = 0.2;
+    const HEIGHT_ABOVE_HEAD = 0.05;
     const HEAD_OFFSET = -0.025;
     const SIZE_Y = 0.075;
     const LETTER_OFFSET = 0.03; // arbitrary value to dynamically change width, could be more accurate by detecting characters
@@ -27,6 +28,16 @@
     var avatarCheckInterval;
     var currentAvatarList;
     var grabbedAvatarList;
+
+    Agent.isAvatar = true;
+
+    function log(describer, obj) {
+        obj = obj || '';
+        print('&======');
+        print(describer);
+        print(JSON.stringify(obj));
+        print('======&');
+    }
 
     var NameDisplayController = {
         nameGroup: [],
@@ -41,33 +52,45 @@
         deleteIndex: function(index){
             this.nameGroup.splice(index,1);
         },
-        addName: function(avatar, id, name){
+        addName: function(avatar, id, name, index, description){
             var index = this.nameGroup.length;
-            this.nameGroup.push(new NameDisplayMaker(avatar, id, name, index));
+            var newNameGroupMember = new NameDisplayMaker(avatar, id, name, index, description);
+            // log("newNameGroupMember", newNameGroupMember)
+            this.nameGroup.push(newNameGroupMember);
+            // log("nameGroup", this.nameGroup)
         },
     };
 
-    function NameDisplayMaker(avatar, id, name, index, props) {
+    function NameDisplayMaker(avatar, id, name, index, description) {
         this.nameTagEntityID = Uuid.Null;
         this.lastCheckForEntity = 0;
         this.avatar = avatar;
         this.id = id;
         this.name = name + id;
         this.index = index;
-        this.props = {};
+        this.description = description;
     }
-
     NameDisplayMaker.prototype.addNameTag = function() {
-        var nameTagPosition = Vec3.sum(this.avatar.getHeadPosition(), Vec3.multiply(HEAD_OFFSET, Quat.getForward(this.avatar.orientation)));
+        var headIndex = this.avatar.getJointIndex("Head");
+        var jT = this.avatar.getJointTranslations(headIndex)[2];
+        log("this.avatar.scale", this.avatar.scale);
+        var newPosition = this.avatar.position
+        newPosition.y = newPosition.y * this.avatar.scale;
+        var neckPosition = Vec3.sum(jT, newPosition);
+        log("joint", jT);
+        log("neckPosition", neckPosition);
+
+        // for( var key in this.avatar) { print(JSON.stringify(key + ":" + this.avatar))}
+        var nameTagPosition = Vec3.sum(neckPosition, Vec3.multiply(HEAD_OFFSET, Quat.getForward(this.avatar.orientation)));
         nameTagPosition.y += HEIGHT_ABOVE_HEAD;
         var nameTagProperties = {
             name: this.avatar.displayName + ' Name Tag',
             type: 'Text',
-            text: this.avatar.displayName,
+            text: this.avatar.displayName + "\n" + this.description,
             lineHeight: LINE_HEIGHT,
-            parentID: this.avatar.id,
+            parentID: this.avatar.sessionUUID,
             dimensions: this.dimensionsFromName(),
-            position: nameTagPosition
+            position: nameTagPosition,
         }
         nameTagEntityID = Entities.addEntity(nameTagProperties, CLIENTONLY);
     }
@@ -92,7 +115,7 @@
     }
     NameDisplayMaker.prototype.dimensionsFromName = function() {
         return {
-            x: LETTER_OFFSET * avatar.displayName.length,
+            x: LETTER_OFFSET * this.avatar.displayName.length,
             y: SIZE_Y,
             z: 0.0
         }
@@ -144,30 +167,80 @@
     }
 
     function onAvatarCheckInterval(){
-        print("in Callback")
 
-        currentAvatarList = AvatarList.getAvatarIdentifiers()
-        for (var i = 0; i < currentAvatarList.length; i++) {
-            var currentAvatar = currentAvatarList[i]
-                var grabbedAvatar = AvatarList.getAvatar(currentAvatar);
-                JSON.stringify(grabbedAvatar);
-                // avatar, id, name, index, props?  getHeadPosition, orientation, displayName, id
-                NameDisplayController.nameGroup.push(grabbed)
+    }
+
+    function onAvatarAddedEvent(id){
+        var grabbedAvatar = AvatarList.getAvatar(id);
+        Script.require('./request.js').request('https://highfidelity.com/users/miladn', function(error, response) {
+            var regex = /meta content=\"(.*)\" property=\"og:description\" /;
+            var description = response.match(regex)[0].split("<")[1].split("\"")[1];
+            log("response", description);
+            index = NameDisplayController.nameGroup.length;
+            NameDisplayController.addName(grabbedAvatar, grabbedAvatar.id, grabbedAvatar.displayName, index, description);
+            log("turning On all current Tags")
+            NameDisplayController.nameGroup[index].setup();
+        })
+
+        Script.require('./request.js').request('https://highfidelity.com/api/v1/users?status="49bc6b85-7b29-4333-b610-a818e6c71d8a"', function(error, response) {
+            log("response from server", response);
+            log("error", error);
+
+
+        })
+    }
+
+    function onAvatarRemovedEvent(){
+
+    }
+
+    function turnOnAllCurrentTags(){
+        for (var i = 0 ; i < NameDisplayController.nameGroup.length; i++){
+            log("turning on:", NameDisplayController.nameGroup[i].name );
+            NameDisplayController.nameGroup[i].setup();
         }
+
     }
 
     function setup(){
-        // AvatarList.setShouldShowReceiveStats = true;
-        print("in Setup")
         avatarCheckInterval = Script.setInterval(onAvatarCheckInterval, CHECK_FOR_ENTETIES_INTERVAL);
-        print("avatarCheckInterval: " + avatarCheckInterval);
+
+        currentAvatarList = AvatarList.getAvatarIdentifiers()
+        log("currentAvatarLists", currentAvatarList);
+        for (var i = 0; i < currentAvatarList.length; i++) {
+            var currentAvatar = currentAvatarList[i];
+            var grabbedAvatar = AvatarList.getAvatar(currentAvatar);
+            // log("grabbedAvatar", grabbedAvatar);
+            log("grabbedAvatar.id", grabbedAvatar.sessionUUID);
+            log("Agent.sessionUUID", Agent.sessionUUID);
+
+            if( grabbedAvatar.sessionUUID !== Agent.sessionUUID){
+                Script.require('./request.js').request('https://highfidelity.com/users/miladn', function(error, response) {
+                    var regex = /meta content=\"(.*)\" property=\"og:description\" /;
+                    var description = response.match(regex)[0].split("<")[1].split("\"")[1];
+                    log("response", description);
+                    NameDisplayController.addName(grabbedAvatar, grabbedAvatar.id, grabbedAvatar.displayName, i, description);
+                    log("turning On all current Tags")
+                    turnOnAllCurrentTags();
+                })
+            }
+
+
+        }
+
+        AvatarList.avatarAddedEvent.connect(onAvatarAddedEvent);
+        AvatarList.avatarAddedEvent.connect(onAvatarRemovedEvent);
+
 
     }
 
     function tearDown(){
         Script.clearInterval(avatarCheckInterval);
+        AvatarList.avatarAddedEvent.disconnect(onAvatarAddedEvent);
+        AvatarList.avatarAddedEvent.disconnect(onAvatarRemovedEvent);
     }
 
-    setup();
+    Script.setTimeout(setup, STARTUP_DELAY * 1.5);
+
     Script.scriptEnding.connect(tearDown);
-}())
+}());
